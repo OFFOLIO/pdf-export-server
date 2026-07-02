@@ -1,0 +1,78 @@
+name: Build, Package, Release (mogenius-build-dev.yaml)
+description: Build and release a Docker image for AMD64 architecture without semantic release.
+'on':
+  release:
+    types:
+      - created
+  push:
+    branches:
+      - main
+env:
+  VERSION: 0.0.1
+  MO_DOCKERFILE: Dockerfile
+  MO_DOCKERCONTEXT: .
+  MO_REGISTRY_AUTH_URL: https://ghcr.io
+  MO_REGISTRY_URL: ghcr.io/willigis34
+  MO_IMAGE_NAME: pdf-dev
+  MO_API_KIND: workspace
+  MO_API_TOKEN_EXPIRES_AT__75C4FA4A572DF9E02F6C: '2026-09-30T10:23:07.000Z'
+  MO_SERVICE__75C4FA4A572DF9E02F6C: H4sIAAAAAAAAA02Ou27DIBSG3+WfOUpt8I25S5eO2TEcKhQbENjuJcq7V0mrquv3X69I5c3E8GW2kOKLg8bcWMmmmakdRkeq7Qaau0bSyE4Z1yrVs4eAXfa6cXlEevlkXacUdXJiUnY2NA62Jz9M0rF30yR7CLyncqnZWH41K0MjeZ+WkCjnlRwfEChc014sQ19xCfHe/cx5SZ8rxw0CedmLWaDh/miFgMnhzKWGFKFhcq6no4FANCs/9hz0Vna+/SBoZOeJP3IqG1UuB5f/7rv+++j2DeIC5VsgAQAA
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: get semversion
+        run: |
+          VERSION=$(git describe --tags $(git rev-list --tags --max-count=1))
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - name: Get last commit hash
+        id: lastHash
+        run: |
+          LAST_HASH=$(git rev-parse --short HEAD)
+          echo "LAST_HASH=$LAST_HASH" >> $GITHUB_ENV
+      - id: containerRegistryLogin
+        name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.MO_REGISTRY_AUTH_URL }}
+          username: ${{ secrets.MO_REGISTRY_USER__MOGENIUS_BUILD_DEV }}
+          password: ${{ secrets.MO_REGISTRY_PAT__MOGENIUS_BUILD_DEV }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push amd64 image
+        id: buildAndPushImage
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.MO_DOCKERCONTEXT }}
+          file: ${{ env.MO_DOCKERFILE }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.MO_REGISTRY_URL }}/${{ env.MO_IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.MO_REGISTRY_URL }}/${{ env.MO_IMAGE_NAME }}:latest
+            ${{ env.MO_REGISTRY_URL }}/${{ env.MO_IMAGE_NAME }}:${{ env.LAST_HASH }}
+          build-args: ''
+      - id: releaseWithMogenius-75C4FA4A572DF9E02F6C
+        name: Release with mogenius
+        uses: mogenius/mogenius-release-action@v1
+        with:
+          dev: false
+          image: ${{ env.MO_REGISTRY_URL }}/${{ env.MO_IMAGE_NAME }}:${{ env.VERSION }}
+          kind: Deployment
+          namespace: ppm-dev
+          resourceName: pdf-export-server
+          containerName: pdf-export-server
+          keyKind: ${{ env.MO_API_KIND }}
+          token: bearer ${{ secrets.MO_API_TOKEN__75C4FA4A572DF9E02F6C__MOGENIUS_BUILD_DEV }}
