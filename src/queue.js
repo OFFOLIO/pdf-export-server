@@ -11,7 +11,7 @@ const
     // In testing mode workers throw simulated crashes at random, so allow more retries to keep tests deterministic
     TESTING_MAX_FAILS = 3,
     // Errors that mean Chromium itself died (the only case worth retrying)
-    CHROMIUM_CRASH_RE = /Target closed|Session closed|Protocol error|browser has disconnected|Navigation failed because browser has disconnected/i,
+    CHROMIUM_CRASH_RE = /Target closed|Session closed|Protocol error|browser has disconnected|Navigation failed because browser has disconnected|Page crashed/i,
     // This is used for testing purposes only
     FAIL_PROBABILITY = 0.4,
     // Timeout in ms before destroying the worker
@@ -821,4 +821,4 @@ class Worker extends Loggable {
     }
 }
 
-module.exports = { Queue, Worker };
+module.exports = { Queue, Worker, CHROMIUM_CRASH_RE };
