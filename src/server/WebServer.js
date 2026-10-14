@@ -406,7 +406,11 @@ module.exports = class WebServer extends ExportServer {
                     }
                 }
                 else {
-                    pages.push(request.html);
+                    // A message carries one fragment ({ html }) or a list of them; the export handler
+                    // expects a flat list, otherwise it reads `undefined` for every nested fragment.
+                    if (request.html !== undefined) {
+                        pages.push(...[].concat(request.html));
+                    }
 
                     delete request.html;
 

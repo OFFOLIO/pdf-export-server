@@ -141,7 +141,13 @@ module.exports = class ExportServer {
 
             emitter?.on('close', onClose);
 
-            const files = await this.taskQueue.queue({ requestId, items : html.map(i => i.html), config });
+            const items = html.map(i => i?.html);
+
+            if (items.some(item => typeof item !== 'string')) {
+                throw new Error('Invalid html fragment: every item must carry an `html` string');
+            }
+
+            const files = await this.taskQueue.queue({ requestId, items, config });
 
             emitter?.off('close', onClose);
 
