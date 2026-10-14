@@ -12,6 +12,9 @@ const { buffer } = require('node:stream/consumers');
 const ExportServer = require('./ExportServer.js');
 const { RequestCancelError } = require('../exception.js');
 const { getId } = require('../utils/helpers.js');
+const { checkLimits } = require('./limits.js');
+const { warmUp } = require('./lifecycle.js');
+const { createMetrics } = require('./metrics.js');
 const packageInfo = require('../../package.json');
 
 const CLOSE_REASON = {
@@ -25,6 +28,9 @@ module.exports = class WebServer extends ExportServer {
         console.log(`[${packageInfo.name}@${packageInfo.version}] Starting server...`);
 
         this.files = {};
+        this.pendingRequests = new Set();
+        this.config = config;
+        this.metrics = createMetrics({ queue : this.taskQueue, pendingRequests : this.pendingRequests });
 
         this.createServer(config);
     }
@@ -44,8 +50,8 @@ module.exports = class WebServer extends ExportServer {
         }, options);
 
         app.use(addRequestId());
-        app.use(bodyParser.json({ limit : options.maximum || '50mb' }));
-        app.use(bodyParser.urlencoded({ extended : false, limit : options.maximum || '50mb' }));
+        app.use(bodyParser.json({ limit : options.maximum || '100mb' }));
+        app.use(bodyParser.urlencoded({ extended : false, limit : options.maximum || '100mb' }));
 
         //Set CORS
         if (options.cors !== 'false') {
@@ -68,6 +74,18 @@ module.exports = class WebServer extends ExportServer {
         }
 
         app.get('/status', me.handleStatus.bind(me));
+        app.get('/ready', me.handleReady.bind(me));
+        app.get('/metrics', async(req, res) => {
+            try {
+                const body = await me.metrics.registry.metrics();
+                res.set('Content-Type', me.metrics.contentType);
+                res.end(body);
+            }
+            catch (e) {
+                me.logger.log('warn', `metrics failed: ${e && e.stack || e}`);
+                res.status(500).end();
+            }
+        });
 
         //Get the file, fileKey will be a guid. This serves the pdf
         app.get('/:fileKey/', me.handleFileKey.bind(me));
@@ -156,6 +174,10 @@ module.exports = class WebServer extends ExportServer {
         });
     }
 
+    handleReady(req, res) {
+        res.status(this.ready ? 200 : 503).jsonp({ ready : Boolean(this.ready) });
+    }
+
     handleFileKey(req, res) {
         const
             fileKey = req.params.fileKey,
@@ -182,12 +204,32 @@ module.exports = class WebServer extends ExportServer {
     handleExportPOSTRequest(req, res) {
         const request = req.body;
         const me = this;
+        const startedAt = Date.now();
 
         //Accepts encoded and parsed html fragments. If still encoded, then parse
         if (typeof request.html === 'string') {
             request.html = JSON.parse(request.html);
         }
 
+        const refusal = checkLimits({
+            pages    : Array.isArray(request.html) ? request.html.length : 0,
+            pending  : me.pendingRequests.size,
+            maxPages : me.config['max-pages'],
+            maxQueue : me.config['max-queue']
+        });
+
+        if (refusal) {
+            me.logger.log('warn', `POST request ${req.id} refused: ${refusal.body.code}`);
+            me.metrics.refused();
+            res.set(refusal.headers || {});
+            res.status(refusal.status).jsonp(refusal.body);
+            return;
+        }
+
+        // Keyed by a per-request token: express-request-id reuses a client supplied X-Request-Id, so req.id can collide
+        const pendingToken = Symbol(req.id);
+        const state = { recorded : false, deferRelease : false };
+        me.pendingRequests.add(pendingToken);
         me.logger.log('info', `POST request ${req.id}`);
         me.logger.log('verbose', `POST request ${req.id} headers: ${JSON.stringify(req.headers)}`);
 
@@ -199,7 +241,13 @@ module.exports = class WebServer extends ExportServer {
             if (request.sendAsBinary) {
                 res.set('Content-Type', 'application/octet-stream');
                 res.status(200);
+                let bytes = 0;
+                // The request stays pending until the PDF is fully written, so drain does not exit mid-stream
+                state.deferRelease = true;
+                res.once('close', () => me.pendingRequests.delete(pendingToken));
+                fileStream.on('data', chunk => bytes += chunk.length);
                 fileStream.pipe(res);
+                me.finishRequest(req, request, { bytes : () => bytes, result : 'success', startedAt }, res, state);
             }
             else {
                 //Send the url for the cached file, will is cached for 10 seconds
@@ -207,16 +255,21 @@ module.exports = class WebServer extends ExportServer {
                     success : true,
                     url     : me.setFile(req.protocol + '://' + req.get('host') + req.originalUrl, request, fileStream)
                 });
+                me.finishRequest(req, request, { bytes : null, result : 'success', startedAt }, null, state);
             }
-        }).catch(e => {
-            if (e instanceof RequestCancelError) {
+        }, rejection => {
+            const e = rejection instanceof Error ? rejection : new Error(String(rejection));
+
+            if (rejection instanceof RequestCancelError) {
                 // Shorthand call doesn't work here for some reason
                 me.logger.log('verbose', `POST request ${req.id} cancelled`);
+                me.finishRequest(req, request, { bytes : null, result : 'cancelled', startedAt }, null, state);
             }
             else {
                 // Shorthand call doesn't work here for some reason
                 me.logger.log('warn', `POST request ${req.id} failed`);
                 me.logger.log('warn', e.stack);
+                me.finishRequest(req, request, { bytes : null, result : 'failed', startedAt }, null, state);
 
                 //Make up min 500 or 200?
                 res.status(request.sendAsBinary ? 500 : 200).jsonp({
@@ -225,7 +278,75 @@ module.exports = class WebServer extends ExportServer {
                     stack   : e.stack
                 });
             }
+        }).catch(rejection => {
+            const e = rejection instanceof Error ? rejection : new Error(String(rejection));
+
+            // A failure while answering a successful export is not a second result: it is logged, never re-counted
+            me.logger.log('warn', `POST request ${req.id} response failed: ${e.stack}`);
+
+            // Nothing is streaming reliably any more: release in .finally (a later 'close' delete is harmless)
+            state.deferRelease = false;
+
+            // ...unless nothing was recorded yet (e.g. the success handler threw before recording)
+            if (!state.recorded) {
+                me.finishRequest(req, request, { bytes : null, result : 'failed', startedAt }, null, state);
+            }
+
+            if (!res.headersSent) {
+                res.status(500).jsonp({ success : false, msg : e.message });
+            }
+        }).finally(() => {
+            if (!state.deferRelease) {
+                me.pendingRequests.delete(pendingToken);
+            }
         });
+    }
+
+    /**
+     * Records metrics and the structured request log line. When `res` is given (binary streaming) the record is made
+     * once the response has been fully written, so duration and bytes are final.
+     */
+    finishRequest(req, request, { bytes, result, startedAt }, res, state) {
+        if (state) {
+            state.recorded = true;
+        }
+
+        const record = () => {
+            try {
+                this.metrics.observe({ result, durationSeconds : (Date.now() - startedAt) / 1000 });
+                this.logRequest(req, request, { bytes : typeof bytes === 'function' ? bytes() : bytes, result, startedAt });
+            }
+            catch (e) {
+                // Observability must never alter the response
+            }
+        };
+
+        if (res) {
+            res.once('close', record);
+        }
+        else {
+            record();
+        }
+    }
+
+    // Never logs export HTML or PDF content, only sizes and identifiers
+    logRequest(req, request, { bytes, result, startedAt }) {
+        const fields = {
+            requestId  : req.id,
+            tenant     : req.headers['x-tenant'] || null,
+            userHash   : req.headers['x-user-hash'] || null,
+            pages      : Array.isArray(request.html) ? request.html.length : 0,
+            bytes,
+            durationMs : Date.now() - startedAt,
+            result
+        };
+
+        if (this.config['log-format'] === 'json') {
+            this.logger.log('info', 'export request', fields);
+        }
+        else {
+            this.logger.log('info', JSON.stringify(fields));
+        }
     }
 
     handleExportWebSocketConnection(ws, req, timeout) {
@@ -285,7 +406,11 @@ module.exports = class WebServer extends ExportServer {
                     }
                 }
                 else {
-                    pages.push(request.html);
+                    // A message carries one fragment ({ html }) or a list of them; the export handler
+                    // expects a flat list, otherwise it reads `undefined` for every nested fragment.
+                    if (request.html !== undefined) {
+                        pages.push(...[].concat(request.html));
+                    }
 
                     delete request.html;
 
@@ -353,13 +478,22 @@ module.exports = class WebServer extends ExportServer {
     /**
      * Start the service
      */
-    start() {
-        return Promise.all([
-            this.startHttpServer(),
-            this.startHttpsServer()
-        ]).catch(e => {
+    async start() {
+        const me = this;
+
+        try {
+            await Promise.all([
+                me.startHttpServer(),
+                me.startHttpsServer()
+            ]);
+
+            // Proves Chromium can launch before /ready reports 200
+            await warmUp(me.taskQueue, me.logger);
+            me.ready = true;
+        }
+        catch (e) {
             console.error(e);
             throw e;
-        });
+        }
     }
 };

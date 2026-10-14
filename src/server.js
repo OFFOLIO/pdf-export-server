@@ -2,6 +2,7 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const Commands = require('./commands.js');
 const WebServer = require('./server/WebServer.js');
+const { applyEnv } = require('./config/env.js');
 let { config } = require('../app.config.js');
 
 //Do a check if this is a Pkg executable or is executed from nodejs commandline
@@ -23,6 +24,7 @@ if (options.verbose) {
 }
 
 config = Object.assign(options['no-config'] ? {} : config, options);
+applyEnv(config);
 
 if (config.http === config.https) {
     config.http = false;
@@ -37,17 +39,8 @@ if (config.level && config.logger) {
     config.logger.level = config.level;
 }
 
-let chromiumArgs = [];
-
-if (config['no-sandbox']) {
-    chromiumArgs.push('--no-sandbox');
-}
-
-if (config['disable-web-security']) {
-    chromiumArgs.push('--disable-web-security');
-}
-
-config.chromiumArgs = chromiumArgs;
+const { buildChromiumArgs } = require('./config/chromium.js');
+config.chromiumArgs = buildChromiumArgs(config);
 config.chromiumExecutablePath = chromiumExecutablePath;
 
 if (config.help) {
@@ -57,7 +50,25 @@ if (config.help) {
 else if (config.http || config.https) {
     const webServer = new WebServer(config);
 
-    webServer.start();
+    webServer.start().catch(e => {
+        console.error('Server failed to start: ' + (e && e.stack || e));
+        process.exit(1);
+    });
+
+    const { drain } = require('./server/lifecycle.js');
+    const shutdown = async() => {
+        webServer.ready = false;
+        const result = await drain({
+            pending : webServer.pendingRequests,
+            servers   : [webServer.httpServer, webServer.httpsServer].filter(Boolean),
+            wsServers : [webServer.wsServer, webServer.wssServer].filter(Boolean),
+            graceMs : 30000
+        });
+        webServer.taskQueue.stop();
+        process.exit(result === 'drained' ? 0 : 1);
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
 }
 else {
     commands.showHelp();

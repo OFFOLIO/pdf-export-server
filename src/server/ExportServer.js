@@ -7,7 +7,7 @@ const { getLogger } = require('../logger.js');
 
 module.exports = class ExportServer {
     constructor(config) {
-        const { tabs, chromiumArgs, chromiumExecutablePath, logger, testing, quick } = config;
+        const { tabs, chromiumArgs, chromiumExecutablePath, logger, testing, quick, timeout } = config;
 
         this.taskQueue = new Queue({
             maxWorkers : config['max-workers'],
@@ -15,10 +15,11 @@ module.exports = class ExportServer {
             chromiumArgs,
             chromiumExecutablePath,
             quick,
-            testing
+            testing,
+            timeout
         });
 
-        this.logger = getLogger(logger);
+        this.logger = getLogger({ ...logger, 'log-format' : config['log-format'] });
 
         this.taskQueue.on('log', ({ level, message, id, label }) => {
             // Skip logging deliberate testing exceptions
@@ -140,7 +141,13 @@ module.exports = class ExportServer {
 
             emitter?.on('close', onClose);
 
-            const files = await this.taskQueue.queue({ requestId, items : html.map(i => i.html), config });
+            const items = html.map(i => i?.html);
+
+            if (items.some(item => typeof item !== 'string')) {
+                throw new Error('Invalid html fragment: every item must carry an `html` string');
+            }
+
+            const files = await this.taskQueue.queue({ requestId, items, config });
 
             emitter?.off('close', onClose);
 
