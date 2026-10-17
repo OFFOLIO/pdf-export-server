@@ -17,7 +17,7 @@ env:
   MO_SERVICE__75C4FA4A572DF9E02F6C: H4sIAAAAAAAAA02Ou27DIBSG3+WfOUpt8I25S5eO2TEcKhQbENjuJcq7V0mrquv3X69I5c3E8GW2kOKLg8bcWMmmmakdRkeq7Qaau0bSyE4Z1yrVs4eAXfa6cXlEevlkXacUdXJiUnY2NA62Jz9M0rF30yR7CLyncqnZWH41K0MjeZ+WkCjnlRwfEChc014sQ19xCfHe/cx5SZ8rxw0CedmLWaDh/miFgMnhzKWGFKFhcq6no4FANCs/9hz0Vna+/SBoZOeJP3IqG1UuB5f/7rv+++j2DeIC5VsgAQAA
 jobs:
   build-image:
-    runs-on: offolio-k8s
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
@@ -46,12 +46,10 @@ jobs:
           registry: ${{ env.MO_REGISTRY_AUTH_URL }}
           username: ${{ secrets.MO_REGISTRY_USER__MOGENIUS_BUILD_DEV }}
           password: ${{ secrets.MO_REGISTRY_PAT__MOGENIUS_BUILD_DEV }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          # Rootless BuildKit on offolio-dev (no Docker daemon on the runners).
-          driver: remote
-          endpoint: tcp://buildkitd.arc-buildkit.svc.cluster.local:1234
       - name: Build and push amd64 image
         id: buildAndPushImage
         uses: docker/build-push-action@v5
