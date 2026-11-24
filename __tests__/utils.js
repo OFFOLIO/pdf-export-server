@@ -90,6 +90,8 @@ async function startServer(config = {}) {
         findNextHttpPort : true,
         // Host resources locally to maintain stability
         resources        : path.join('__tests__', 'samples', 'resources'),
+        // The static resource server the samples load from
+        'allowed-origins' : `http://localhost:${RESOURCES_PORT}`,
         chromiumArgs     : [
             '--no-sandbox',
             '--disable-setuid-sandbox'
@@ -224,10 +226,11 @@ function getLoggerConfig(filename) {
  * @returns {ExportServer}
  */
 function createExportServer(config = {}) {
-    const { workers = 1, testing = false, logger, timeout } = config;
+    const { workers = 1, testing = false, logger, timeout, allowedOrigins = `http://localhost:${RESOURCES_PORT}` } = config;
 
     return new ExportServer({
-        'max-workers' : workers,
+        'max-workers'     : workers,
+        'allowed-origins' : allowedOrigins,
         testing,
         timeout,
         logger        : logger || appConfig.logger,

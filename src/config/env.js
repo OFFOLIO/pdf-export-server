@@ -11,7 +11,8 @@ const NUMERIC = {
 const STRINGS = {
     PDF_EXPORT_MAXIMUM    : 'maximum',
     PDF_EXPORT_CORS       : 'cors',
-    PDF_EXPORT_LOG_FORMAT : 'log-format'
+    PDF_EXPORT_LOG_FORMAT : 'log-format',
+    PDF_EXPORT_ALLOWED_ORIGINS : 'allowed-origins'
 };
 
 function applyEnv(config, env = process.env) {

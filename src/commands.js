@@ -10,6 +10,7 @@ module.exports = class Commands {
             { name: 'websocket', alias: 'w', type: Boolean, description: 'Start websocket server' },
             { name: 'cors', alias: 'c', type: String, description: 'CORS origin, default value "*". Set to "false" to disable CORS' },
             { name: 'maximum', alias: 'm', type: String, description: 'Maximum upload size (default 100mb)' },
+            { name: 'allowed-origins', type: String, description: 'Comma separated origins (https://app.example.com) exported pages may load stylesheets, fonts and images from; the only clientURL origins opened. Everything else is blocked' },
             { name: 'resources', alias: 'r', type: String, description: 'The absolute path to the resource directory. This path will be accessible via the webserver' },
             { name: 'max-workers', type: Number, description: 'Maximum amount of workers (puppeteer instances), default 4' },
             { name: 'max-pages', type: Number, description: 'Refuse requests with more pages than this (413)' },

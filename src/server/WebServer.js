@@ -444,6 +444,9 @@ module.exports = class WebServer extends ExportServer {
                 });
 
                 this.httpServer.on('listening', () => {
+                    if (this.config.resources) {
+                        this.requestPolicy.addResourcesPort('http', this.httpPort);
+                    }
                     console.log('Http server started on port ' + this.httpPort);
                     resolve();
                 });
@@ -468,6 +471,9 @@ module.exports = class WebServer extends ExportServer {
         if (this.httpsServer) {
             return new Promise(resolve => {
                 this.httpsServer.listen(this.httpsPort, () => {
+                    if (this.config.resources) {
+                        this.requestPolicy.addResourcesPort('https', this.httpsPort);
+                    }
                     console.log('Https server started on port ' + this.httpsPort);
                     resolve();
                 });
