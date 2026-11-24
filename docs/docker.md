@@ -77,6 +77,7 @@ services:
             PDF_EXPORT_MAX_QUEUE: "20"
             PDF_EXPORT_MAXIMUM: "100mb"
             PDF_EXPORT_CORS: "https://app.example.com"
+            PDF_EXPORT_ALLOWED_ORIGINS: "https://app.example.com"
             PDF_EXPORT_LOG_FORMAT: "json"
         stop_grace_period: 35s
 ```

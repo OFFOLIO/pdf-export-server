@@ -104,6 +104,11 @@ This is the OFFOLIO fork of Bryntum's export server. It adds environment-variabl
 (`413 TOO_MANY_PAGES`, `503 QUEUE_FULL`), `/ready` and `/metrics` endpoints, JSON request logs, and a graceful `SIGTERM`
 drain. See [OFFOLIO additions](docs/configuration.md#offolio-additions) and the [Docker guide](docs/docker.md) for details.
 
+Exported pages run without JavaScript and may only load from the origins listed in `PDF_EXPORT_ALLOWED_ORIGINS`
+(set it to the application's public origin); everything else is blocked. Also give the server an egress
+NetworkPolicy that keeps it away from cluster services and cloud metadata. See
+[Outbound requests](docs/configuration.md#outbound-requests).
+
 ## Links
 - [Architecture](docs/architecture.md)
 - [Server protocol](docs/protocol.md)

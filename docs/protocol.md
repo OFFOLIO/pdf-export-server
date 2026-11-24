@@ -20,7 +20,8 @@ Request JSON payload is expected to have the following structure:
     orientation: "portrait",
     
     // Url to navigate before loading HTML. Required for secured pages. Leave empty if you use local resources
-    // or your server doesn't use CSP/CORS policies
+    // or your server doesn't use CSP/CORS policies. Only opened when its origin is in the server's
+    // allowed-origins; the page may load nothing outside allowed-origins (see configuration.md#outbound-requests)
     clientURL: "",
     
     // If false server will return JSON response with a link to a file which will be available for a short

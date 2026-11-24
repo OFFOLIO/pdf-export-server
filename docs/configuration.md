@@ -12,6 +12,7 @@ Usage: ./server [OPTION]
   -c, --cors=HOST           CORS origin, default value "*". Set to "false" to disable CORS
   -m, --maximum=SIZE        Maximum upload size (default 50mb)
   -r, --resources=PATH      The absolute path to the resource directory. This path will be accessible via the webserver
+      --allowed-origins=LIST Comma separated origins exported pages may load stylesheets, fonts and images from
       --max-workers=WORKERS Maximum amount of workers (puppeteer instances) (default: 5)
       --level=LEVEL         Specify log level (error, warn, verbose). Default "error"
       --timeout=TIMEOUT     Request timeout time in seconds
@@ -91,9 +92,60 @@ Environment variables are applied after `app.config.js` and the CLI flags, so th
 | `max-pages` (`--max-pages`) | `PDF_EXPORT_MAX_PAGES` | 500 | A request with more HTML pages is refused with `413 {"code":"TOO_MANY_PAGES"}` |
 | `max-queue` (`--max-queue`) | `PDF_EXPORT_MAX_QUEUE` | 20 | Once this many export requests are pending, new ones get `503 {"code":"QUEUE_FULL"}` with `Retry-After: 10` |
 | `maximum` (`-m`) | `PDF_EXPORT_MAXIMUM` | `100mb` | Request body limit; keep it aligned with nginx `client_max_body_size` |
+| `allowed-origins` (`--allowed-origins`) | `PDF_EXPORT_ALLOWED_ORIGINS` | none | Comma separated origins (`https://app.example.com`) the exported pages may load from. See [Outbound requests](#outbound-requests) |
 | `cors` (`-c`) | `PDF_EXPORT_CORS` | `*` | Value of `Access-Control-Allow-Origin`; set it to the application origin in production |
 | `log-format` (`--log-format`) | `PDF_EXPORT_LOG_FORMAT` | none | `json` writes one JSON object per line to the console |
 | n/a | `PDF_EXPORT_TEST_PORT` | 9999 | Port of the static resource server used by the Jest suite only |
+
+##### Outbound requests
+
+The exported HTML comes from the caller, so the server must not let it load arbitrary URLs: an `<iframe>`, `<img>`,
+`<link>` or CSS `url()` pointing at an internal service would otherwise be fetched by Chromium inside your network and
+rendered into the PDF. Every export page therefore:
+
+- runs with JavaScript disabled (Bryntum export pages are static markup and styles), so it cannot open WebSockets or
+  other connections;
+- may only load `data:`, `blob:`, `about:blank`, URLs whose origin (scheme, host **and port**) is listed in
+  `allowed-origins`, and, when `resources` is set, the server's own `/resources/` path on `localhost` / `127.0.0.1`;
+- has every other request aborted, including redirects to another origin and other ports of an allowed host;
+- opens the request's `clientURL` only when it passes the same check; otherwise it starts from `about:blank` and a
+  warning is logged.
+
+Set `allowed-origins` to the public origin(s) of the application that sends the exports, for example
+`PDF_EXPORT_ALLOWED_ORIGINS=https://ppm.example.com`. With no value, no external stylesheet, font or image is loaded
+(exports lose their styling) and a warning is logged at start-up. Never use wildcards: they are ignored.
+
+`--disable-web-security` stays off by default; it removes the browser's same-origin protections and logs a warning
+when set. Do not enable it in production.
+
+Restrict the network as well (defence in depth). In Kubernetes, give the export server an egress NetworkPolicy that
+only allows DNS and the hosts behind `allowed-origins`, and nothing in the cluster or the cloud metadata range:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pdf-export-server-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: pdf-export-server
+  policyTypes: [Egress]
+  egress:
+    - to:                     # DNS
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:                     # the application's public ingress only (replace with its address range)
+        - ipBlock:
+            cidr: 203.0.113.10/32
+      ports:
+        - { protocol: TCP, port: 443 }
+```
 
 `quick` defaults to `true`: the page is considered loaded on the `load` event, then the server waits for
 `document.fonts.ready`. Lato and Font Awesome are installed in the Docker image so that the fonts are present.
