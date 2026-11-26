@@ -2,6 +2,7 @@ const { EventEmitter } = require('events');
 const puppeteer = require('puppeteer');
 const { RequestCancelError } = require('./exception.js');
 const { getId } = require('./utils/helpers.js');
+const { RequestPolicy } = require('./utils/requestPolicy.js');
 
 const
     // Also defined in commands.js
@@ -120,7 +121,7 @@ class Loggable extends EventEmitter {
 }
 
 class Queue extends Loggable {
-    constructor({ maxWorkers = MAX_WORKERS, useTabs = false, chromiumExecutablePath, chromiumArgs = [], quick = false, testing = false, timeout, maxFails }) {
+    constructor({ maxWorkers = MAX_WORKERS, useTabs = false, chromiumExecutablePath, chromiumArgs = [], quick = false, testing = false, timeout, maxFails, requestPolicy = new RequestPolicy() }) {
         super();
         const me = this;
 
@@ -159,6 +160,12 @@ class Queue extends Loggable {
          * @type {Number}
          */
         me.maxFails = maxFails != null ? maxFails : (testing ? TESTING_MAX_FAILS : MAX_FAILS);
+
+        /**
+         * URLs the rendered pages may load (see src/utils/requestPolicy.js)
+         * @type {RequestPolicy}
+         */
+        me.requestPolicy = requestPolicy;
 
         // List of html chunks to convert to pdf/png
         me.jobs = [];
@@ -243,6 +250,7 @@ class Queue extends Loggable {
                 quick          : me.quick,
                 testing        : me.testing,
                 timeout        : me.timeout,
+                requestPolicy  : me.requestPolicy,
                 browserFactory : me.startPuppeteer
             });
 
@@ -529,12 +537,13 @@ class Worker extends Loggable {
     constructor(config) {
         super(config);
 
-        const { browser, browserFactory, testing, quick, timeout } = config;
+        const { browser, browserFactory, testing, quick, timeout, requestPolicy = new RequestPolicy() } = config;
 
         this.browser = browser;
         this.browserFactory = browserFactory;
         this.testing = testing;
         this.timeout = timeout;
+        this.requestPolicy = requestPolicy;
 
         this.waitUntil = quick ? 'load' : 'networkidle0';
 
@@ -590,7 +599,51 @@ class Worker extends Loggable {
 
     // Hook to override after new browser page is opened
     async onPageCreated(page) {
-        page.on('console', this.handleConsoleMessage.bind(this));
+        const me = this;
+
+        page.on('console', me.handleConsoleMessage.bind(me));
+
+        // Exported pages are static markup and styles (Bryntum sends no scripts). Without JavaScript the page cannot
+        // open WebSockets or other connections that request interception does not see.
+        await page.setJavaScriptEnabled(false);
+
+        await me.requestPolicy.apply(page, url => {
+            let origin;
+
+            try {
+                origin = new URL(url).origin;
+            }
+            catch (e) {
+                origin = String(url).slice(0, 40);
+            }
+
+            me.warn(`Page ${me.currentJobId} blocked a request to ${origin} (not in allowed-origins)`);
+        });
+    }
+
+    /**
+     * Opens the caller's clientURL (so its stylesheets and fonts load same-origin) when its origin is in
+     * allowed-origins, otherwise about:blank.
+     */
+    async openClientURL(page, clientURL) {
+        const me = this;
+
+        if (clientURL && me.requestPolicy.allowsClientURL(clientURL)) {
+            try {
+                await page.goto(clientURL, { waitUntil : 'load', referer : 'bryntum_pdf_export_server' });
+                return;
+            }
+            catch (e) {
+                // Log warning, try to continue export
+                me.warn(`Unable to open client url ${clientURL}.\nError: ${e.message}`);
+            }
+        }
+        else if (clientURL) {
+            me.warn('clientURL ignored: its origin is not in allowed-origins');
+        }
+
+        // This navigation helps to set content much faster
+        await page.goto('about:blank');
     }
 
     handleConsoleMessage(message) {
@@ -708,21 +761,7 @@ class Worker extends Loggable {
             right  : 1
         };
 
-        // NOTE: NOT SUPPORTED IN WSL
-        if (config.clientURL) {
-            // Navigate page to get rid of possible CORS
-            try {
-                await page.goto(config.clientURL, { waitUntil : 'load', referer : 'bryntum_pdf_export_server' });
-            }
-            catch (e) {
-                // Log warning, try to continue export
-                me.warn(`Unable to open client url ${config.clientURL}.\nError: ${e.message}`);
-            }
-        }
-        else {
-            // This navigation helps to set content much faster
-            await page.goto('about:blank');
-        }
+        await me.openClientURL(page, config.clientURL);
 
         await page.setContent(html, { waitUntil : me.waitUntil, timeout : me.timeout });
         // quick mode waits for `load` only; fonts can still be loading. Waiting for
@@ -762,21 +801,7 @@ class Worker extends Loggable {
             deviceScaleFactor : 4
         }, config);
 
-        // NOTE: NOT SUPPORTED IN WSL
-        if (config.clientURL) {
-            // Navigate page to get rid of possible CORS
-            try {
-                await page.goto(config.clientURL, { waitUntil : 'load', referer : 'bryntum_pdf_export_server' });
-            }
-            catch (e) {
-                // Log warning, try to continue export
-                me.warn(`Unable to open client url ${config.clientURL}.\nError: ${e.message}`);
-            }
-        }
-        else {
-            // This navigation helps to set content much faster
-            await page.goto('about:blank');
-        }
+        await me.openClientURL(page, config.clientURL);
 
         await page.setContent(html, { waitUntil : me.waitUntil, timeout : me.timeout });
         // quick mode waits for `load` only; fonts can still be loading. Waiting for

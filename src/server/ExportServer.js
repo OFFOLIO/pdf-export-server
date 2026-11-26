@@ -4,12 +4,28 @@ const memoryStreams = require('memory-streams');
 const { joinImages } = require('join-images');
 const { Queue } = require('../queue.js');
 const { getLogger } = require('../logger.js');
+const { RequestPolicy } = require('../utils/requestPolicy.js');
 
 module.exports = class ExportServer {
     constructor(config) {
         const { tabs, chromiumArgs, chromiumExecutablePath, logger, testing, quick, timeout } = config;
 
+        this.logger = getLogger({ ...logger, 'log-format' : config['log-format'] });
+
+        this.requestPolicy = new RequestPolicy({ allowedOrigins : config['allowed-origins'] });
+
+        if (this.requestPolicy.invalidOrigins.length) {
+            this.logger.warn(`allowed-origins: ignored invalid entries ${this.requestPolicy.invalidOrigins.join(', ')}`);
+        }
+        if (!this.requestPolicy.allowedOrigins.size) {
+            this.logger.warn('allowed-origins is empty: exported pages cannot load any external stylesheet, font or image');
+        }
+        if ((chromiumArgs || []).includes('--disable-web-security')) {
+            this.logger.warn('Chromium runs with --disable-web-security: do not use this in production');
+        }
+
         this.taskQueue = new Queue({
+            requestPolicy : this.requestPolicy,
             maxWorkers : config['max-workers'],
             useTabs    : Boolean(tabs),
             chromiumArgs,
@@ -18,8 +34,6 @@ module.exports = class ExportServer {
             testing,
             timeout
         });
-
-        this.logger = getLogger({ ...logger, 'log-format' : config['log-format'] });
 
         this.taskQueue.on('log', ({ level, message, id, label }) => {
             // Skip logging deliberate testing exceptions

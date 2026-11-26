@@ -19,6 +19,11 @@ const config = {
     // Maximum size of the uploaded data (aligned with nginx client_max_body_size)
     "maximum"       : "100mb",
 
+    // Origins (scheme://host[:port]) the exported pages may load stylesheets, fonts and images from, comma separated.
+    // The caller's clientURL is only opened when its origin is listed. Every other request (other hosts, other ports,
+    // redirects elsewhere) is blocked. Env: PDF_EXPORT_ALLOWED_ORIGINS. Example: "https://ppm.example.com"
+    "allowed-origins" : null,
+
     // Path to static resources to be served. See readme.md for details
     "resources"     : null,
 
